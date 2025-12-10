@@ -1,0 +1,464 @@
+import requests
+import base64
+import uuid
+import time
+from datetime import datetime
+
+class AvitoGigaAssistant:
+    def __init__(self):
+        # Ваши данные
+        self.giga_client_id = "Gigachat api keys"
+        self.giga_client_secret = "Gigachat api keys"
+        
+        self.avito_client_id = "h4nZK9fvBMgj9ysiNTDc"
+        self.avito_client_secret = "Znz55kNJN81gbehVzFjJeU__YkyxPlks3en5ClbG"
+        
+        # URLs
+        self.giga_auth_url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+        self.giga_api_url = "https://gigachat.devices.sberbank.ru/api/v1"
+        self.avito_auth_url = "https://api.avito.ru/token"
+        self.avito_api_url = "https://api.avito.ru"
+        
+        # Токены
+        self.giga_token = None
+        self.giga_token_expires = 0
+        self.avito_token = None
+        self.avito_token_expires = 0
+        
+        # Контекст диалогов
+        self.conversations = {}
+    
+    # ==================== AVITO AUTH ====================
+    
+    def get_avito_token(self):
+        """Получение access_token для Avito API"""
+        print(f"[{datetime.now()}] 🔑 Получаем токен Avito...")
+        
+        credentials = f"{self.avito_client_id}:{self.avito_client_secret}"
+        auth_key = base64.b64encode(credentials.encode()).decode()
+        
+        headers = {
+            "Authorization": f"Basic {auth_key}",
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        
+        data = {"grant_type": "client_credentials"}
+        
+        try:
+            response = requests.post(
+                self.avito_auth_url,
+                headers=headers,
+                data=data,
+                timeout=10
+            )
+            
+            print(f"   Статус: {response.status_code}")
+            
+            if response.status_code == 200:
+                token_data = response.json()
+                self.avito_token = token_data["access_token"]
+                self.avito_token_expires = time.time() + token_data["expires_in"] - 300
+                
+                print(f"   ✅ Токен Avito получен: {self.avito_token[:30]}...")
+                print(f"   Действует: {token_data['expires_in']} секунд")
+                return True
+            else:
+                print(f"   ❌ Ошибка: {response.status_code}")
+                print(f"   Ответ: {response.text}")
+                return False
+                
+        except Exception as e:
+            print(f"   ❌ Исключение: {e}")
+            return False
+    
+    def _refresh_avito_token_if_needed(self):
+        if not self.avito_token or time.time() > self.avito_token_expires:
+            return self.get_avito_token()
+        return True
+    
+    # ==================== GIGACHAT AUTH ====================
+    
+    def get_gigachat_token(self):
+        print(f"[{datetime.now()}] 🔑 Получаем токен GigaChat...")
+        
+        credentials = f"{self.giga_client_id}:{self.giga_client_secret}"
+        auth_key = base64.b64encode(credentials.encode()).decode()
+        
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+            "RqUID": str(uuid.uuid4()),
+            "Authorization": f"Basic {auth_key}"
+        }
+        data = {"scope": "GIGACHAT_API_PERS"}
+        
+        try:
+            response = requests.post(self.giga_auth_url, headers=headers, data=data, verify=False)
+            
+            if response.status_code == 200:
+                token_data = response.json()
+                self.giga_token = token_data["access_token"]
+                self.giga_token_expires = token_data["expires_at"] / 1000 - 300
+                
+                print(f"   ✅ Токен GigaChat получен")
+                return True
+            else:
+                print(f"   ❌ Ошибка: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            print(f"   ❌ Исключение: {e}")
+            return False
+    
+    def _refresh_gigachat_token_if_needed(self):
+        if not self.giga_token or time.time() > self.giga_token_expires:
+            return self.get_gigachat_token()
+        return True
+    
+    # ==================== ПРАВИЛЬНЫЕ AVITO ENDPOINTS ====================
+    
+    def get_avito_chats(self):
+        """Правильный endpoint для получения чатов"""
+        if not self._refresh_avito_token_if_needed():
+            return []
+        
+        headers = {
+            "Authorization": f"Bearer {self.avito_token}",
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            # Правильный endpoint согласно документации Avito
+            response = requests.get(
+                f"{self.avito_api_url}/messenger/v1/accounts/self/chats",
+                headers=headers,
+                timeout=10
+            )
+            
+            print(f"[{datetime.now()}] 📨 Запрос чатов: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("chats", [])
+            elif response.status_code == 403:
+                print(f"   ⚠️  Нет доступа к чатам. Нужны права 'messenger'")
+                return []
+            else:
+                print(f"   ❌ Ошибка: {response.status_code} - {response.text[:200]}")
+                return []
+                
+        except Exception as e:
+            print(f"[{datetime.now()}] ❌ Исключение: {e}")
+            return []
+    
+    def get_chat_messages(self, chat_id):
+        """Получение сообщений из чата"""
+        if not self._refresh_avito_token_if_needed():
+            return []
+        
+        headers = {
+            "Authorization": f"Bearer {self.avito_token}",
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            response = requests.get(
+                f"{self.avito_api_url}/messenger/v1/accounts/self/chats/{chat_id}/messages",
+                headers=headers,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                return response.json().get("messages", [])
+            else:
+                print(f"[{datetime.now()}] ❌ Ошибка получения сообщений: {response.status_code}")
+                return []
+                
+        except Exception as e:
+            print(f"[{datetime.now()}] ❌ Исключение: {e}")
+            return []
+    
+    def send_avito_message(self, chat_id, message):
+        """Отправка сообщения в чат Avito"""
+        if not self._refresh_avito_token_if_needed():
+            return False
+        
+        headers = {
+            "Authorization": f"Bearer {self.avito_token}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "message": {
+                "text": message
+            }
+        }
+        
+        try:
+            response = requests.post(
+                f"{self.avito_api_url}/messenger/v1/accounts/self/chats/{chat_id}/messages",
+                headers=headers,
+                json=data,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                print(f"[{datetime.now()}] ✅ Сообщение отправлено в чат {chat_id}")
+                return True
+            elif response.status_code == 403:
+                print(f"[{datetime.now()}] ⚠️  Нет прав на отправку сообщений")
+                return False
+            else:
+                print(f"[{datetime.now()}] ❌ Ошибка отправки: {response.status_code}")
+                print(f"   Ответ: {response.text[:200]}")
+                return False
+                
+        except Exception as e:
+            print(f"[{datetime.now()}] ❌ Исключение: {e}")
+            return False
+    
+    # ==================== ДОПОЛНИТЕЛЬНЫЕ МЕТОДЫ ====================
+    
+    def get_user_profile(self):
+        """Получение информации о профиле пользователя"""
+        if not self._refresh_avito_token_if_needed():
+            return None
+        
+        headers = {
+            "Authorization": f"Bearer {self.avito_token}",
+            "Content-Type": "application/json"
+        }
+        
+        try:
+            response = requests.get(
+                f"{self.avito_api_url}/core/v1/accounts/self",
+                headers=headers,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                print(f"[{datetime.now()}] ❌ Ошибка профиля: {response.status_code}")
+                return None
+                
+        except Exception as e:
+            print(f"[{datetime.now()}] ❌ Исключение: {e}")
+            return None
+    
+    def check_permissions(self):
+        """Проверка доступных прав"""
+        profile = self.get_user_profile()
+        if profile:
+            print(f"[{datetime.now()}] 👤 Профиль: {profile.get('name', 'Неизвестно')}")
+            print(f"[{datetime.now()}] 🔑 Права: {profile.get('scopes', [])}")
+            return profile.get('scopes', [])
+        return []
+    
+    # ==================== GIGACHAT METHODS ====================
+    
+    def generate_response(self, user_message, context=None):
+        """Генерация ответа через GigaChat"""
+        if not self._refresh_gigachat_token_if_needed():
+            return "Извините, сервис временно недоступен."
+        
+        system_prompt = """Ты - помощник продавца на Avito. Отвечай вежливо и профессионально.
+        
+Правила:
+1. Приветствуй покупателя
+2. Отвечай на вопросы о товаре
+3. Уточняй детали если нужно
+4. Предлагай удобное время для встречи
+5. Не давай контакты вне Avito
+6. Кратко и по делу
+
+Примеры ответов:
+- "Здравствуйте! Да, товар в наличии."
+- "Можем встретиться сегодня после 18:00."
+- "Какой размер вас интересует?"
+- "Извините, цена фиксированная.""""
+
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        if context:
+            messages.extend(context[-4:])  # Последние 2 пары вопрос-ответ
+        
+        messages.append({"role": "user", "content": user_message})
+        
+        headers = {
+            "Authorization": f"Bearer {self.giga_token}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "model": "GigaChat",
+            "messages": messages,
+            "temperature": 0.7,
+            "max_tokens": 120
+        }
+        
+        try:
+            response = requests.post(
+                f"{self.giga_api_url}/chat/completions",
+                headers=headers,
+                json=data,
+                verify=False,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                answer = result["choices"][0]["message"]["content"]
+                return answer
+            else:
+                print(f"[{datetime.now()}] ❌ Ошибка GigaChat: {response.status_code}")
+                return "Извините, не удалось обработать ваш запрос."
+                
+        except Exception as e:
+            print(f"[{datetime.now()}] ❌ Исключение: {e}")
+            return "Извините, сервис временно недоступен."
+    
+    # ==================== MAIN LOGIC ====================
+    
+    def run_initial_test(self):
+        """Начальный тест всех компонентов"""
+        print("=" * 60)
+        print("🧪 НАЧАЛЬНЫЙ ТЕСТ СИСТЕМЫ")
+        print("=" * 60)
+        
+        # 1. Получаем токены
+        print("\n1. 🔐 ПОЛУЧЕНИЕ ТОКЕНОВ")
+        if not self.get_avito_token():
+            print("❌ Не удалось получить токен Avito")
+            return False
+        
+        if not self.get_gigachat_token():
+            print("❌ Не удалось получить токен GigaChat")
+            return False
+        
+        # 2. Проверяем профиль и права
+        print("\n2. 👤 ПРОВЕРКА ПРОФИЛЯ AVITO")
+        scopes = self.check_permissions()
+        
+        if not scopes:
+            print("⚠️  Не удалось получить информацию о правах")
+        elif "messenger" not in str(scopes):
+            print("⚠️  ВНИМАНИЕ: Нет прав 'messenger' для работы с чатами!")
+            print("   Нужно добавить права в настройках приложения Avito")
+        
+        # 3. Тест GigaChat
+        print("\n3. 🤖 ТЕСТ GIGACHAT")
+        test_response = self.generate_response("Привет! Ты работаешь?")
+        print(f"   Ответ: {test_response}")
+        
+        # 4. Тест чатов Avito
+        print("\n4. 💬 ТЕСТ ЧАТОВ AVITO")
+        chats = self.get_avito_chats()
+        print(f"   Найдено чатов: {len(chats)}")
+        
+        if chats:
+            print(f"   Пример последнего чата:")
+            chat = chats[0]
+            print(f"   - ID: {chat.get('id', 'N/A')}")
+            print(f"   - Последнее сообщение: {chat.get('last_message', {}).get('text', 'N/A')[:50]}...")
+        
+        print("\n" + "=" * 60)
+        print("✅ ТЕСТ ЗАВЕРШЕН. Запускаю основной мониторинг...")
+        print("=" * 60)
+        
+        return True
+    
+    def run_polling(self, interval=30):
+        """Основной цикл опроса чатов"""
+        
+        # Сначала запускаем тест
+        if not self.run_initial_test():
+            print("❌ Тест не пройден. Проверьте настройки.")
+            return
+        
+        processed_chats = set()
+        
+        print("\n🚀 НАЧИНАЮ МОНИТОРИНГ ЧАТОВ...")
+        
+        while True:
+            try:
+                # Получаем чаты
+                chats = self.get_avito_chats()
+                
+                if not chats:
+                    print(f"[{datetime.now()}] 📭 Чатов нет")
+                else:
+                    print(f"[{datetime.now()}] 📨 Найдено чатов: {len(chats)}")
+                    
+                    for chat in chats:
+                        chat_id = chat.get("id")
+                        
+                        # Проверяем непрочитанные сообщения
+                        unread_count = chat.get("unread_count", 0)
+                        if unread_count > 0 and chat_id not in processed_chats:
+                            last_message = chat.get("last_message", {}).get("text", "")
+                            
+                            if last_message and len(last_message) > 2:  # Не пустое сообщение
+                                print(f"[{datetime.now()}] 💬 Новое сообщение в чате {chat_id[:8]}...")
+                                print(f"   👤: {last_message[:100]}...")
+                                
+                                # Получаем историю
+                                messages = self.get_chat_messages(chat_id)
+                                
+                                # Формируем контекст
+                                context = []
+                                for msg in messages[-6:]:  # Последние 3 пары
+                                    is_self = msg.get("author", {}).get("id") == "self"
+                                    role = "assistant" if is_self else "user"
+                                    context.append({"role": role, "content": msg.get("text", "")})
+                                
+                                # Генерируем ответ
+                                response = self.generate_response(last_message, context)
+                                print(f"   🤖: {response[:100]}...")
+                                
+                                # Отправляем ответ
+                                if self.send_avito_message(chat_id, response):
+                                    processed_chats.add(chat_id)
+                                    print(f"[{datetime.now()}] ✅ Ответ отправлен")
+                                else:
+                                    print(f"[{datetime.now()}] ❌ Ошибка отправки")
+                
+                # Очищаем старые записи
+                if len(processed_chats) > 50:
+                    processed_chats = set(list(processed_chats)[-25:])
+                
+                # Пауза
+                time.sleep(interval)
+                
+            except KeyboardInterrupt:
+                print("\n\n🛑 Бот остановлен пользователем")
+                break
+            except Exception as e:
+                print(f"[{datetime.now()}] ❌ Критическая ошибка: {e}")
+                time.sleep(60)
+
+# ==================== ЗАПУСК ====================
+
+if __name__ == "__main__":
+    bot = AvitoGigaAssistant()
+    
+    print("=" * 60)
+    print("🤖 AVITO + GIGACHAT АССИСТЕНТ")
+    print("=" * 60)
+    
+    # Выбор режима
+    print("\nРежимы работы:")
+    print("1. Тестовый режим (только проверка)")
+    print("2. Полный режим (мониторинг чатов)")
+    
+    choice = input("Выберите режим (1/2): ").strip()
+    
+    if choice == "1":
+        # Только тест
+        bot.run_initial_test()
+        print("\n📊 Для полной работы нужно:")
+        print("1. Добавить права 'messenger' в приложении Avito")
+        print("2. Перезапустить бота в режиме 2")
+    else:
+        # Полный режим
+        bot.run_polling(interval=20)
